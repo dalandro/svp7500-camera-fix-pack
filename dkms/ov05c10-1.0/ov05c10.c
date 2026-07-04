@@ -7,6 +7,7 @@
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <linux/units.h>
 #include <linux/regmap.h>
 #include <linux/version.h>
@@ -899,8 +900,43 @@ static int ov05c10_parse_fwnode(struct ov05c10 *ov05c10, struct device *dev)
 
 	endpoint = fwnode_graph_get_next_endpoint(fwnode, NULL);
 	if (!endpoint) {
-		dev_err(dev, "endpoint node not found\n");
-		return -EPROBE_DEFER;
+		/*
+		 * After an SVP7500/CVS chip reset the USB i2c adapter
+		 * re-enumerates and this i2c client is destroyed and
+		 * re-created. ACPI unbind of the dead client poisons the
+		 * ACPI fwnode's ->secondary (set_primary_fwnode(dev, NULL)
+		 * leaves ERR_PTR(-ENODEV)), orphaning the ipu-bridge swnode
+		 * graph that is still registered. Re-attach it and retry so
+		 * the camera survives a CVS reset without a reboot.
+		 */
+		const struct software_node *swn =
+			software_node_find_by_name(NULL, "OVTI05C1-0");
+
+		if (swn && is_acpi_device_node(fwnode)) {
+			fwnode->secondary = software_node_fwnode(swn);
+			endpoint = fwnode_graph_get_next_endpoint(fwnode, NULL);
+			dev_info(dev, "re-attached ipu-bridge swnode graph%s\n",
+				 endpoint ? "" : " (still no endpoint)");
+			/*
+			 * Bank an extra kobject ref on the swnode: the i2c
+			 * client teardown path over-puts non-managed
+			 * secondary swnodes (one ref lost per destroy/create
+			 * cycle), and once the refcount hits zero the node is
+			 * freed and recovery is impossible until reboot
+			 * (observed live: node vanished after two cycles).
+			 * One banked ref per heal keeps the balance positive.
+			 */
+			if (endpoint)
+				software_node_find_by_name(NULL, "OVTI05C1-0");
+		}
+		if (!endpoint) {
+			dev_err(dev, "endpoint node not found (swn=%d acpi=%d sec=%ld)\n",
+				!!swn, is_acpi_device_node(fwnode),
+				IS_ERR(fwnode->secondary) ?
+					PTR_ERR(fwnode->secondary) :
+					(long)!!fwnode->secondary);
+			return -EPROBE_DEFER;
+		}
 	}
 
 	ret = v4l2_fwnode_endpoint_alloc_parse(endpoint, &bus_cfg);
