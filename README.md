@@ -2,6 +2,15 @@
 
 Restore RGB camera functionality on Linux for laptops with the Synaptics SVP7500 CVS bridge (USB `06CB:0701`) and Intel IPU7 (Panther Lake / Lunar Lake).
 
+> **About this fork** (of [jibsta210/svp7500-camera-fix-pack](https://github.com/jibsta210/svp7500-camera-fix-pack)) — adds two fixes on top of upstream v0.7, developed on a **Dell Pro 14 Plus PB14250** (Lunar Lake, OV05C10) running **Ubuntu 26.04** / kernel 7.0.0-1008-oem:
+>
+> 1. **ipu-bridge: OVTI05C1 advertises both 480MHz + 900MHz link frequencies.** The ov05c10 driver requires both or probe fails with -EINVAL — with the 480MHz-only entry the sensor never binds on the PB14250.
+> 2. **ov05c10: survives i2c client re-creation (swnode self-heal).** Any SVP7500 USB re-enumeration (suspend/resume quirks, chip reset, flaky boot) destroys and re-creates the sensor's i2c client; an i2c-core/swnode kernel bug then severs — and after a couple of cycles outright frees — the ipu-bridge fwnode graph, leaving the camera dead until reboot. The probe now re-attaches the swnode and compensates the refcount (full analysis in the commit message).
+>
+> With these, the PB14250 status upgrades from "install confirmed, streaming TBD" to **streaming confirmed** (≤1080p, software ISP, 17–31 fps; native 2880×1808 hangs — always pass an explicit size, e.g. `cam --camera=1 -s width=1280,height=720`). Also confirms the pack works on **Ubuntu** (listed as untested below). Ubuntu note: the system uses **dracut**, so `ipu7_fw.bin` must be added to the initramfs (`install_items+=" /lib/firmware/intel/ipu/ipu7_fw.bin "` in `/etc/dracut.conf.d/`) or the IPU7 probe fails -ENOENT at early boot.
+>
+> Bonus for SVP7500 owners: the re-enumeration recovery enables turning the latched privacy LED off without a reboot — power-cycle the bridge's USB port (`usb3-portN/disable`), wait ~1–3 min of bridge fw warmup, reprobe the sensor. The latch is firmware-internal ("has streamed since last power-loss") and clears only on chip power-loss; ownership release and SET_HOST_IDENTIFIER don't move it on this hardware (protocol 1.0).
+
 > ⚠️ **Testing scope:** All testing was done on **CachyOS** with a custom-built **linux-cachyos-susfix 7.0.5** kernel (CachyOS's `linux-cachyos` source plus our own kernel patch for the `ipu7_pci_remove` ordering bug). The DKMS modules themselves should be distro-agnostic (just C code against the kernel API), so Fedora / Arch / Debian / Ubuntu *should* work — **but we haven't tested those personally.** If you try it on another distro, please report back via the issue tracker.
 >
 > Specifically untested:
