@@ -809,6 +809,47 @@ static ssize_t cmd_store(struct device *dev, struct device_attribute *attr,
 			 "%s: SET_HOST_IDENTIFIER vision_sensing=1 sent %d/%zu bytes\n",
 			 __func__, cnt, sizeof(buf2));
 	}
+	else if (sysfs_streq(buf, "claim-led") || sysfs_streq(buf, "unclaim-led")) {
+		/*
+		 * SET_HOST_IDENTIFIER (0x0805) with privacy_led_host toggled.
+		 * The probe path hardcodes privacy_led_host=0, leaving the
+		 * physical privacy LED under bridge-firmware control — which
+		 * latches it ON at first stream until power-off. Claiming LED
+		 * control for the host may stop the firmware latch (this is
+		 * plausibly what the Windows driver does). unclaim-led reverts
+		 * to the probe default.
+		 */
+		struct i2c_client *i2c = container_of(cvs->dev, struct i2c_client, dev);
+		union cv_host_identifiers hi = { .value = 0 };
+		u8 buf2[2 + 4];
+		int cnt;
+
+		hi.field.privacy_led_host = sysfs_streq(buf, "claim-led") ? 1 : 0;
+		hi.field.rgbcamera_pwrup_host = 1;  /* same as probe — preserve */
+
+		buf2[0] = 0x08;
+		buf2[1] = 0x05;
+		memcpy(&buf2[2], &hi.value, 4);
+		cnt = i2c_master_send(i2c, buf2, sizeof(buf2));
+		dev_info(cvs->dev,
+			 "%s: SET_HOST_IDENTIFIER privacy_led_host=%u sent %d/%zu bytes\n",
+			 __func__, hi.field.privacy_led_host, cnt, sizeof(buf2));
+	}
+	else if (sysfs_streq(buf, "release")) {
+		/*
+		 * Soft ownership release — the GPIO req/resp inverse of the
+		 * existing "acquire" verb, wired to the previously dead
+		 * cvs_release_camera_sensor_internal(). Candidate "camera
+		 * off" half of a manual LED/ownership toggle; "acquire"
+		 * (possibly followed by "mipi") is the "camera on" half.
+		 * Risk: probe comments warn the sensor power chain may
+		 * collapse when ownership drops — reboot recovers.
+		 */
+		int r = cvs_release_camera_sensor_internal();
+		dev_info(cvs->dev,
+			 "%s: release returned %d (owner=%d ref=%d)\n",
+			 __func__, r, cvs->owner, cvs->int_ref_count);
+	}
 	else if (sysfs_streq(buf, "factory-reset")) {
 		/*
 		 * FACTORY_RESET (0x0831) — untested upstream opcode. May clear
